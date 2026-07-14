@@ -11,5 +11,7 @@
     "container_repository_name": "{{ cookiecutter.project_slug }}",
     "app_port": "8000",
     "uat_environment_name": "uat",
-    "prod_environment_name": "production"
+    "prod_environment_name": "production",
+    "sast_tool": ["codeql", "bandit"],
+    "sca_tool": ["dependency-scanning", "pip-audit"]
 }

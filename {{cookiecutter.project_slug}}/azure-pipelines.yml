@@ -25,11 +25,17 @@ variables:
   isReleaseBranch: $[startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')]
 
 stages:
+  # Microsoft Defender for DevOps runs unconditionally as the org-wide baseline scan
+  # (secrets, IaC misconfig, credential scanning). SAST and SCA below each run exactly
+  # one tool, chosen at scaffold time via cookiecutter's sast_tool / sca_tool prompts.
+  # CodeQL-based options require GitHub Advanced Security for Azure DevOps to be enabled
+  # on this repo (Project Settings > Repositories > Advanced Security) - if it isn't
+  # licensed/enabled, regenerate with sast_tool=bandit / sca_tool=pip-audit instead.
   - stage: SecurityScan
     displayName: 'Security Scan'
     jobs:
-      - job: CodeAnalysis
-        displayName: 'Code Analysis'
+      - job: DefenderForDevOps
+        displayName: 'Microsoft Defender for DevOps'
         pool:
           vmImage: $(vmImageName)
         continueOnError: false
@@ -41,22 +47,19 @@ stages:
               publish: true
               artifactName: 'CodeAnalysisLogs'
 
-          - task: AdvancedSecurity-Codeql-Init@1
-            displayName: 'CodeQL Init'
-            inputs:
-              enableAutomaticCodeQLInstall: true
-              languages: 'python'
-
-          - task: AdvancedSecurity-Dependency-Scanning@1
-            displayName: 'CodeQL Dependency Scanning'
-
-          - task: AdvancedSecurity-Codeql-Analyze@1
-            displayName: 'CodeQL Analyze'
-
   - stage: SCA
     displayName: 'Software Composition Analysis'
     dependsOn: SecurityScan
     jobs:
+{% if cookiecutter.sca_tool == "dependency-scanning" %}
+      - job: DependencyScanning
+        displayName: 'GitHub Advanced Security Dependency Scanning'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: AdvancedSecurity-Dependency-Scanning@1
+            displayName: 'CodeQL Dependency Scanning'
+{% else %}
       - job: PipAudit
         pool:
           vmImage: $(vmImageName)
@@ -79,11 +82,27 @@ stages:
           - publish: pip-audit-report.json
             artifact: sca-report
             displayName: 'Publish SCA report'
+{% endif %}
 
   - stage: SAST
     displayName: 'Static Application Security Testing'
     dependsOn: SecurityScan
     jobs:
+{% if cookiecutter.sast_tool == "codeql" %}
+      - job: CodeQL
+        displayName: 'GitHub Advanced Security CodeQL'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: AdvancedSecurity-Codeql-Init@1
+            displayName: 'CodeQL Init'
+            inputs:
+              enableAutomaticCodeQLInstall: true
+              languages: 'python'
+
+          - task: AdvancedSecurity-Codeql-Analyze@1
+            displayName: 'CodeQL Analyze'
+{% else %}
       - job: Bandit
         pool:
           vmImage: $(vmImageName)
@@ -105,6 +124,7 @@ stages:
           - publish: bandit-report.json
             artifact: sast-report
             displayName: 'Publish SAST report'
+{% endif %}
 
   - stage: Test
     displayName: 'Unit Tests'
