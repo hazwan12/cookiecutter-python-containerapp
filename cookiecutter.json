@@ -9,5 +9,7 @@
     "python_version": "3.11",
     "container_registry_login_server": "myregistry.azurecr.io",
     "container_repository_name": "{{ cookiecutter.project_slug }}",
-    "app_port": "8000"
+    "app_port": "8000",
+    "uat_environment_name": "uat",
+    "prod_environment_name": "production"
 }

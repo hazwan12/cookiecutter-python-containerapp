@@ -1,10 +1,13 @@
+# Branch strategy:
+#   feature/*, dev  - local integration branches. Security scan + SCA/SAST/Test run for fast
+#                      feedback, but no image is built or pushed.
+#   release/*       - cut per release cycle (e.g. release/2026-08). Accumulates changes destined
+#                      for a release. This is the only branch family that builds the image -
+#                      build once, then fan out to UAT and Production below (build-once-deploy-many).
 trigger:
-  branches:
-    include:
-      - main
-  paths:
-    exclude:
-      - README.md
+  - feature/*
+  - dev
+  - release/*
 
 pr:
   branches:
@@ -19,10 +22,40 @@ variables:
   repositoryName: '{{ cookiecutter.container_repository_name }}'
   # Set this to the name of an Azure DevOps service connection to your ACR
   dockerRegistryServiceConnection: 'acr-service-connection'
+  isReleaseBranch: $[startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')]
 
 stages:
+  - stage: SecurityScan
+    displayName: 'Security Scan'
+    jobs:
+      - job: CodeAnalysis
+        displayName: 'Code Analysis'
+        pool:
+          vmImage: $(vmImageName)
+        continueOnError: false
+        steps:
+          - task: MicrosoftSecurityDevOps@1
+            displayName: 'Run Code Analysis'
+            inputs:
+              policy: azuredevops
+              publish: true
+              artifactName: 'CodeAnalysisLogs'
+
+          - task: AdvancedSecurity-Codeql-Init@1
+            displayName: 'CodeQL Init'
+            inputs:
+              enableAutomaticCodeQLInstall: true
+              languages: 'python'
+
+          - task: AdvancedSecurity-Dependency-Scanning@1
+            displayName: 'CodeQL Dependency Scanning'
+
+          - task: AdvancedSecurity-Codeql-Analyze@1
+            displayName: 'CodeQL Analyze'
+
   - stage: SCA
     displayName: 'Software Composition Analysis'
+    dependsOn: SecurityScan
     jobs:
       - job: PipAudit
         pool:
@@ -49,6 +82,7 @@ stages:
 
   - stage: SAST
     displayName: 'Static Application Security Testing'
+    dependsOn: SecurityScan
     jobs:
       - job: Bandit
         pool:
@@ -74,6 +108,7 @@ stages:
 
   - stage: Test
     displayName: 'Unit Tests'
+    dependsOn: SecurityScan
     jobs:
       - job: PyTest
         pool:
@@ -103,8 +138,12 @@ stages:
             inputs:
               summaryFileLocation: 'coverage.xml'
 
+  # --- Build once ---------------------------------------------------------
+  # Only builds on release/* branches. UAT and Production below both deploy this
+  # same image (tagged with $(Build.BuildId)) - never rebuilt per environment.
   - stage: BuildAndPush
     displayName: 'Build & Push Container Image'
+    condition: and(succeeded(), eq(variables.isReleaseBranch, 'True'))
     dependsOn:
       - SCA
       - SAST
@@ -124,3 +163,59 @@ stages:
               tags: |
                 $(Build.BuildId)
                 latest
+
+  # --- Deploy many ---------------------------------------------------------
+  # Each deployment job targets an Azure DevOps environment. Configure approvals/checks
+  # on the '{{ cookiecutter.uat_environment_name }}' and '{{ cookiecutter.prod_environment_name }}'
+  # environments in Project Settings > Environments (e.g. manual approval before Production).
+  - stage: DeployUAT
+    displayName: 'Deploy to UAT'
+    dependsOn: BuildAndPush
+    condition: and(succeeded(), eq(variables.isReleaseBranch, 'True'))
+    jobs:
+      - deployment: DeployContainerApp
+        displayName: 'Deploy Container App (UAT)'
+        environment: '{{ cookiecutter.uat_environment_name }}'
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: 'az containerapp update (UAT)'
+                  inputs:
+                    azureSubscription: 'azure-service-connection-uat'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az containerapp update \
+                        --name $(repositoryName)-uat \
+                        --resource-group <uat-resource-group> \
+                        --image $(containerRegistry)/$(repositoryName):$(Build.BuildId)
+
+  - stage: DeployProduction
+    displayName: 'Deploy to Production'
+    dependsOn: DeployUAT
+    condition: and(succeeded(), eq(variables.isReleaseBranch, 'True'))
+    jobs:
+      - deployment: DeployContainerApp
+        displayName: 'Deploy Container App (Production)'
+        environment: '{{ cookiecutter.prod_environment_name }}'
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: 'az containerapp update (Production)'
+                  inputs:
+                    azureSubscription: 'azure-service-connection-prod'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az containerapp update \
+                        --name $(repositoryName)-prod \
+                        --resource-group <prod-resource-group> \
+                        --image $(containerRegistry)/$(repositoryName):$(Build.BuildId)
