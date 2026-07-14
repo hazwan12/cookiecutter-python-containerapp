@@ -165,6 +165,12 @@ stages:
                 latest
 
   # --- Deploy many ---------------------------------------------------------
+  # DISCLAIMER: the DeployUAT / DeployProduction stages below are an illustrative example only,
+  # showing how the build-once artifact fans out to multiple environments. Actual release/deployment
+  # pipelines for this project should be configured in Azure DevOps under Pipelines > Releases
+  # (or an equivalent environment-gated YAML pipeline maintained separately), not by editing this
+  # example in place. Do not treat these stages as production-ready as-is.
+  #
   # Each deployment job targets an Azure DevOps environment. Configure approvals/checks
   # on the '{{ cookiecutter.uat_environment_name }}' and '{{ cookiecutter.prod_environment_name }}'
   # environments in Project Settings > Environments (e.g. manual approval before Production).
