@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+junit/
+dist/
+build/
+*.egg-info/
+bandit-report.json
+pip-audit-report.json

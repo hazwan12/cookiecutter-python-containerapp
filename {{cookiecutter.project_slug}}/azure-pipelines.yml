@@ -1,0 +1,126 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - README.md
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  pythonVersion: '{{ cookiecutter.python_version }}'
+  vmImageName: 'ubuntu-latest'
+  packageName: '{{ cookiecutter.package_name }}'
+  containerRegistry: '{{ cookiecutter.container_registry_login_server }}'
+  repositoryName: '{{ cookiecutter.container_repository_name }}'
+  # Set this to the name of an Azure DevOps service connection to your ACR
+  dockerRegistryServiceConnection: 'acr-service-connection'
+
+stages:
+  - stage: SCA
+    displayName: 'Software Composition Analysis'
+    jobs:
+      - job: PipAudit
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              pip install pip-audit
+            displayName: 'Install dependencies'
+
+          - script: |
+              pip-audit -r requirements.txt --format json --output pip-audit-report.json
+            displayName: 'Run pip-audit'
+            continueOnError: true
+
+          - publish: pip-audit-report.json
+            artifact: sca-report
+            displayName: 'Publish SCA report'
+
+  - stage: SAST
+    displayName: 'Static Application Security Testing'
+    jobs:
+      - job: Bandit
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install bandit
+            displayName: 'Install Bandit'
+
+          - script: |
+              bandit -r $(packageName) -f json -o bandit-report.json
+            displayName: 'Run Bandit'
+            continueOnError: true
+
+          - publish: bandit-report.json
+            artifact: sast-report
+            displayName: 'Publish SAST report'
+
+  - stage: Test
+    displayName: 'Unit Tests'
+    jobs:
+      - job: PyTest
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              pip install -r requirements-dev.txt
+            displayName: 'Install dependencies'
+
+          - script: |
+              pytest --junitxml=junit/test-results.xml --cov=$(packageName) --cov-report=xml --cov-report=html
+            displayName: 'Run pytest with coverage'
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: 'junit/test-results.xml'
+              testRunTitle: 'Publish test results'
+
+          - task: PublishCodeCoverageResults@2
+            inputs:
+              summaryFileLocation: 'coverage.xml'
+
+  - stage: BuildAndPush
+    displayName: 'Build & Push Container Image'
+    dependsOn:
+      - SCA
+      - SAST
+      - Test
+    jobs:
+      - job: DockerBuildPush
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: Docker@2
+            displayName: 'Build and push image to ACR'
+            inputs:
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              repository: '$(repositoryName)'
+              command: 'buildAndPush'
+              Dockerfile: '**/Dockerfile'
+              tags: |
+                $(Build.BuildId)
+                latest

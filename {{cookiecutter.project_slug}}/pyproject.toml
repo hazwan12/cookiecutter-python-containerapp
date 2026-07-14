@@ -1,0 +1,14 @@
+[project]
+name = "{{ cookiecutter.project_slug }}"
+version = "0.1.0"
+description = "{{ cookiecutter.description }}"
+authors = [
+    { name = "{{ cookiecutter.author_name }}", email = "{{ cookiecutter.author_email }}" }
+]
+requires-python = ">={{ cookiecutter.python_version }}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
